@@ -22,8 +22,7 @@ class QuizSchema(BaseModel):
 # 3. GPT가 만들어낼 '1개의 장면' 규격
 class SceneSchema(BaseModel):
     scene_no: int
-    narrator_text: str = Field(description="이 장면에 들어갈 동화책 내레이션 (한국어)")
-    dialogue: List[str] = Field(description="이 장면에 나오는 캐릭터들의 대사 리스트 (한국어)")
+    text: str = Field(description="이 장면에 들어갈 동화책 내레이션 대사")
     image_prompt: str = Field(description="이 장면을 DALL-E 3로 그리기 위한 영문 프롬프트 (최대한 상세하게)")
     # 프론트가 쓸 임시 빈칸 (나중에 백엔드가 채워줌)
     image_url: str = "" 

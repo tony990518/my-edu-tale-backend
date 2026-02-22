@@ -1,6 +1,8 @@
 import os
 import asyncio
 import base64
+import tempfile
+import uuid
 from openai import OpenAI, AsyncOpenAI
 from dotenv import load_dotenv
 from schemas import StoryDraft
@@ -16,8 +18,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # TTS 음성 생성용 (비동기식 클라이언트)
 aclient = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-TEMP_DIR = "backend/temp"
-os.makedirs(TEMP_DIR, exist_ok=True)
+TEXT_MODEL = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5")  # DALL-E 3에서 최신 모델로 변경 권장
+
 
 # ==========================================
 # 1. [총괄 셰프] GPT-4o 스토리 & 퀴즈 대본 생성 (Structured Outputs)
@@ -73,18 +76,27 @@ def generate_anchor_image(anchor_prompt: str, style_guide: str, character_bible:
     """
     
     try:
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=full_prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1,
-            response_format="b64_json" # 파일 저장을 위해 base64로 받음
-        )
+        params = {
+            "model": IMAGE_MODEL,
+            "prompt": full_prompt,
+            "size": "1024x1024",
+            "quality": "high",
+            "n": 1,
+        }
         
-        # 임시 파일로 저장
-        image_data = base64.b64decode(response.data[0].b64_json)
-        file_path = os.path.join(TEMP_DIR, "anchor.png")
+        # 최신 GPT Image 모델과 기존 DALL-E 모델 파라미터 분기
+        if "gpt-image" in IMAGE_MODEL:
+            params["output_format"] = "png"
+        else:
+            params["response_format"] = "b64_json"
+
+        response = client.images.generate(**params)
+        
+        # 임시 파일로 저장 (OS 기본 임시 폴더 사용)
+        item = response.data[0]
+        b64 = item.b64_json if hasattr(item, "b64_json") and item.b64_json else item.b64
+        image_data = base64.b64decode(b64)
+        file_path = os.path.join(tempfile.gettempdir(), f"anchor_{uuid.uuid4().hex}.png")
         
         with open(file_path, "wb") as f:
             f.write(image_data)
@@ -115,51 +127,50 @@ def generate_scene_image_consistent(scene_no: int, scene_prompt: str, style_guid
     """
     
     try:
-        # 편집(Edit) 기능을 사용하여 스타일 유지 (Anchor 이미지를 마스크/레퍼런스로 활용하는 개념)
-        # 주의: DALL-E 3는 edit을 지원하지 않을 수 있으므로, 여기서는 레퍼런스 프롬프트를 강화하는 전략을 사용하거나
-        # 예제 코드처럼 images.edit (DALL-E 2)을 사용해야 합니다. 
-        # 하지만 DALL-E 3 품질을 원한다면, 현재로선 프롬프트 엔지니어링에 의존하거나 
-        # OpenAI의 최신 기능(Seed, Reference Image 등)이 필요합니다.
-        # *사용자의 요청에 따라 제공된 'deoha' 코드의 로직(images.edit)을 따릅니다.*
-        
-        # 이미지 파일 열기
-        img_files = [open(anchor_path, "rb")]
-        if prev_image_path:
-            img_files.append(open(prev_image_path, "rb"))
+        # 안전한 파일 핸들링을 위해 리스트 준비
+        image_files = [open(anchor_path, "rb")]
+        try:
+            if prev_image_path:
+                image_files.append(open(prev_image_path, "rb"))
+                
+            # 모델 종류에 따라 파라미터 분기 처리
+            params = {
+                "model": IMAGE_MODEL,
+                "image": image_files,
+                "prompt": consistent_prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "quality": "high"
+            }
             
-        # 실제로는 images.edit이 마스크를 요구하거나, 모델이 dall-e-2여야 하는 제약이 있을 수 있음.
-        # 여기서는 제공된 코드의 로직을 최대한 수용하되, 모델은 호환성을 고려해야 함.
-        # 만약 dall-e-3가 edit을 지원하지 않으면 generate로 우회해야 함.
-        
-        # [전략 수정] DALL-E 3는 edit을 지원하지 않음. 
-        # 사용자가 준 코드는 'gpt-image-1.5'라는 가상의 모델을 사용하고 있었음.
-        # 현실적인 구현을 위해 DALL-E 3를 사용하되, 프롬프트에 'Previous Image' 정보를 텍스트로 넣을 순 없음.
-        # 따라서 여기서는 'Anchor' 개념을 프롬프트에 강력하게 주입하는 방식으로 구현합니다.
-        # (OpenAI API의 한계로 인해, 실제 파일 업로드 기반의 일관성 유지는 아직 제한적임)
-        
-        # 하지만 사용자가 'images.edit'을 사용하는 코드를 보여줬으므로, 
-        # DALL-E 2를 사용하여 edit을 시도하거나, 
-        # DALL-E 3로 '생성'하되 프롬프트를 강화하는 쪽으로 가야합니다.
-        # 여기서는 **Quality**를 위해 DALL-E 3를 유지하고, 프롬프트 엔지니어링으로 일관성을 시도합니다.
-        
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=consistent_prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1,
-            response_format="b64_json"
-        )
-        
-        image_data = base64.b64decode(response.data[0].b64_json)
-        file_path = os.path.join(TEMP_DIR, f"scene_{scene_no}.png")
-        
-        with open(file_path, "wb") as f:
-            f.write(image_data)
+            if "gpt-image" in IMAGE_MODEL:
+                params["input_fidelity"] = "high" # 원본 캐릭터 유지율 증대
+                params["output_format"] = "png"
+            else:
+                params["response_format"] = "b64_json"
+
+            # 최신 다중 이미지 기반 edit 수행
+            response = client.images.edit(**params)
             
-        print(f"✅ [{scene_no}번 씬] 그림 완성!")
-        return file_path
-        
+            item = response.data[0]
+            b64 = item.b64_json if hasattr(item, "b64_json") and item.b64_json else item.b64
+            image_data = base64.b64decode(b64)
+            file_path = os.path.join(tempfile.gettempdir(), f"scene_{scene_no}_{uuid.uuid4().hex}.png")
+            
+            with open(file_path, "wb") as f:
+                f.write(image_data)
+                
+            print(f"✅ [{scene_no}번 씬] 그림 완성!")
+            return file_path
+            
+        finally:
+            # 안전하게 열어둔 파일 객체들을 모두 닫습니다 (메모리 릭 및 권한 오류 방지)
+            for f in image_files:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+                    
     except Exception as e:
         print(f"❌ [{scene_no}번 씬] 그림 실패: {e}")
         return ""
@@ -172,8 +183,8 @@ async def generate_audio(text: str, scene_no: int):
     print(f"🎵 [{scene_no}번 씬] 성우 녹음 중...")
     try:
         response = await aclient.audio.speech.create(
-            model="tts-1", 
-            voice="nova",  
+            model="gpt-4o-mini-tts", # 최신 고품질 효율 모델
+            voice="alloy",  
             input=text
         )
         print(f"✅ [{scene_no}번 씬] 녹음 완성!")
@@ -223,9 +234,8 @@ async def generate_all_media_sequential(story_draft: StoryDraft):
     # 3. Audio 생성 (병렬 - 변화 없음)
     audio_tasks = []
     for scene in story_draft.scenes:
-        # 내레이션 + 대사 합치기
-        full_text = scene.narrator_text + " " + " ".join(scene.dialogue)
-        audio_tasks.append(generate_audio(full_text, scene.scene_no))
+        # 내레이션 대사 사용
+        audio_tasks.append(generate_audio(scene.text, scene.scene_no))
         
     audio_results = await asyncio.gather(*audio_tasks)
     media_results.extend(audio_results)
