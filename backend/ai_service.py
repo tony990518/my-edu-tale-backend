@@ -3,9 +3,12 @@ import asyncio
 import base64
 import tempfile
 import uuid
+import logging
 from openai import OpenAI, AsyncOpenAI
 from dotenv import load_dotenv
 from schemas import StoryDraft
+
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 0. 환경설정 및 클라이언트 준비
@@ -26,7 +29,7 @@ IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5")  # DALL-E 3에서
 # 1. [총괄 셰프] GPT-4o 스토리 & 퀴즈 대본 생성 (Structured Outputs)
 # ==========================================
 def generate_story_draft(child_name: str, age: int, personality: str, emotion: str, source_text: str) -> StoryDraft:
-    print("\n⏳ [GPT-4o] 동화 대본 및 캐릭터 설정 생성 중...")
+    logger.info("\n⏳ [GPT-4o] 동화 대본 및 캐릭터 설정 생성 중...")
     
     system_prompt = f"""
     당신은 {age}살 아이들의 마음을 읽어주는 최고의 맞춤형 동화 작가이자 교육 전문가입니다.
@@ -57,7 +60,7 @@ def generate_story_draft(child_name: str, age: int, personality: str, emotion: s
     )
 
     story_draft = completion.choices[0].message.parsed
-    print(f"✅ [GPT-4o] 대본 생성 완료! 제목: {story_draft.title}")
+    logger.info(f"✅ [GPT-4o] 대본 생성 완료! 제목: {story_draft.title}")
     
     return story_draft
 
@@ -66,7 +69,7 @@ def generate_story_draft(child_name: str, age: int, personality: str, emotion: s
 # 2. [미술 감독] 캐릭터 시트(Anchor Image) 생성
 # ==========================================
 def generate_anchor_image(anchor_prompt: str, style_guide: str, character_bible: str) -> str:
-    print("🎨 [Anchor] 캐릭터 시트(기준 이미지) 생성 중...")
+    logger.info("🎨 [Anchor] 캐릭터 시트(기준 이미지) 생성 중...")
     
     full_prompt = f"""
     {style_guide}
@@ -101,11 +104,11 @@ def generate_anchor_image(anchor_prompt: str, style_guide: str, character_bible:
         with open(file_path, "wb") as f:
             f.write(image_data)
             
-        print("✅ [Anchor] 캐릭터 시트 생성 완료!")
+        logger.info("✅ [Anchor] 캐릭터 시트 생성 완료!")
         return file_path
         
     except Exception as e:
-        print(f"❌ [Anchor] 생성 실패: {e}")
+        logger.error(f"❌ [Anchor] 생성 실패: {e}")
         return ""
 
 
@@ -113,7 +116,7 @@ def generate_anchor_image(anchor_prompt: str, style_guide: str, character_bible:
 # 3. [미술팀] 일관성 있는 씬 이미지 생성 (Sequential Editing)
 # ==========================================
 def generate_scene_image_consistent(scene_no: int, scene_prompt: str, style_guide: str, character_bible: str, anchor_path: str, prev_image_path: str = None) -> str:
-    print(f"🎨 [{scene_no}번 씬] 일관성 있는 그림 그리는 중...")
+    logger.info(f"🎨 [{scene_no}번 씬] 일관성 있는 그림 그리는 중...")
     
     # 프롬프트 조합
     consistent_prompt = f"""
@@ -160,7 +163,7 @@ def generate_scene_image_consistent(scene_no: int, scene_prompt: str, style_guid
             with open(file_path, "wb") as f:
                 f.write(image_data)
                 
-            print(f"✅ [{scene_no}번 씬] 그림 완성!")
+            logger.info(f"✅ [{scene_no}번 씬] 그림 완성!")
             return file_path
             
         finally:
@@ -172,7 +175,7 @@ def generate_scene_image_consistent(scene_no: int, scene_prompt: str, style_guid
                     pass
                     
     except Exception as e:
-        print(f"❌ [{scene_no}번 씬] 그림 실패: {e}")
+        logger.error(f"❌ [{scene_no}번 씬] 그림 실패: {e}")
         return ""
 
 
@@ -180,17 +183,17 @@ def generate_scene_image_consistent(scene_no: int, scene_prompt: str, style_guid
 # 4. [음향팀] TTS 음성 생성 (비동기)
 # ==========================================
 async def generate_audio(text: str, scene_no: int):
-    print(f"🎵 [{scene_no}번 씬] 성우 녹음 중...")
+    logger.info(f"🎵 [{scene_no}번 씬] 성우 녹음 중...")
     try:
         response = await aclient.audio.speech.create(
             model="gpt-4o-mini-tts", # 최신 고품질 효율 모델
             voice="alloy",  
             input=text
         )
-        print(f"✅ [{scene_no}번 씬] 녹음 완성!")
+        logger.info(f"✅ [{scene_no}번 씬] 녹음 완성!")
         return {"scene_no": scene_no, "type": "audio", "data": response.read()}
     except Exception as e:
-        print(f"❌ [{scene_no}번 씬] 녹음 실패: {e}")
+        logger.error(f"❌ [{scene_no}번 씬] 녹음 실패: {e}")
         return {"scene_no": scene_no, "type": "audio", "data": None}
 
 

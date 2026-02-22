@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 import asyncio
+import logging
+
+# 로깅 설정 (Render 플랫폼에서 확실하게 찍히도록)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # 우리가 만든 모듈들 불러오기
 from schemas import GenerateRequest
@@ -22,17 +27,18 @@ app.add_middleware(
 
 @app.post("/generate")
 async def generate_story(req: GenerateRequest):
-    print(f"\n=============================================")
-    print(f"📥 [주문 접수] 아이: {req.child_name}, 감정: {req.emotion}, 진도: {req.stage_code}")
-    print(f"=============================================")
+    logger.info(f"\n=============================================")
+    logger.info(f"📥 [주문 접수] 아이: {req.child_name}, 감정: {req.emotion}, 진도: {req.stage_code}")
+    logger.info(f"=============================================")
     
     # ----------------------------------------------------
     # Step 1. 창고에서 교재 텍스트 꺼내오기
     # ----------------------------------------------------
     try:
         curriculum_title, source_text = db_service.get_curriculum(req.stage_code)
-        print(f"✅ [Step 1] DB 조회 성공: {curriculum_title}")
+        logger.info(f"✅ [Step 1] DB 조회 성공: {curriculum_title}")
     except Exception as e:
+        logger.error(f"❌ [Step 1] DB 조회 실패: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
 
 
@@ -47,8 +53,9 @@ async def generate_story(req: GenerateRequest):
             emotion=req.emotion,
             source_text=source_text
         )
-        print(f"✅ [Step 2] 대본 생성 완료: {story_draft.title}")
+        logger.info(f"✅ [Step 2] 대본 생성 완료: {story_draft.title}")
     except Exception as e:
+        logger.error(f"❌ [Step 2] 대본 생성 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"대본 생성 실패: {str(e)}")
 
 
@@ -58,15 +65,16 @@ async def generate_story(req: GenerateRequest):
     try:
         # 기존 parallel 대신 sequential 함수 호출
         raw_media_results = await ai_service.generate_all_media_sequential(story_draft)
-        print(f"✅ [Step 3] 미디어 생성 완료 (총 {len(raw_media_results)}개 파일)")
+        logger.info(f"✅ [Step 3] 미디어 생성 완료 (총 {len(raw_media_results)}개 파일)")
     except Exception as e:
+        logger.error(f"❌ [Step 3] 미디어 생성 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"미디어 생성 실패: {str(e)}")
 
 
     # ----------------------------------------------------
     # Step 4. 생성된 파일들을 Supabase 창고에 업로드 
     # ----------------------------------------------------
-    print("\n📦 [Step 4] 생성된 파일들을 Supabase 창고에 안전하게 순서대로 업로드합니다...")
+    logger.info("\n📦 [Step 4] 생성된 파일들을 Supabase 창고에 안전하게 순서대로 업로드합니다...")
     
     upload_results = []
     for item in raw_media_results:
@@ -83,23 +91,23 @@ async def generate_story(req: GenerateRequest):
                 # 순차 생성된 이미지는 로컬 임시파일/Bytes 상태이므로 직접 업로드
                 perm_url = db_service.upload_to_supabase(data, ".png", "image/png")
                 upload_results.append((scene_no, "image_url", perm_url))
-                print(f"   -> 🎨 {scene_no}번 씬 [그림] 업로드 완료!")
+                logger.info(f"   -> 🎨 {scene_no}번 씬 [그림] 업로드 완료!")
                 
             elif m_type == "audio":
                 # 오디오도 Bytes 상태이므로 직접 업로드
                 perm_url = db_service.upload_to_supabase(data, ".mp3", "audio/mpeg")
                 upload_results.append((scene_no, "audio_url", perm_url))
-                print(f"   -> 🎵 {scene_no}번 씬 [음성] 업로드 완료!")
+                logger.info(f"   -> 🎵 {scene_no}번 씬 [음성] 업로드 완료!")
         except Exception as e:
-            print(f"❌ [Step 4] 업로드 중 에러 발생 (씬 {scene_no}, {m_type}): {e}")
+            logger.error(f"❌ [Step 4] 업로드 중 에러 발생 (씬 {scene_no}, {m_type}): {e}")
 
-    print("✅ [Step 4] 창고 업로드 완벽 종료!")
+    logger.info("✅ [Step 4] 창고 업로드 완벽 종료!")
 
 
     # ----------------------------------------------------
     # Step 5. 최종 JSON 조립 및 DB 저장
     # ----------------------------------------------------
-    print("\n🎁 [Step 5] 최종 JSON 조립 및 DB 저장 중...")
+    logger.info("\n🎁 [Step 5] 최종 JSON 조립 및 DB 저장 중...")
     
     final_scenes = []
     for scene in story_draft.scenes:
@@ -120,7 +128,7 @@ async def generate_story(req: GenerateRequest):
     # ----------------------------------------------------
     # Step 6. 프론트엔드로 배달! (Output)
     # ----------------------------------------------------
-    print("🎉 모든 작업 완료! 프론트엔드로 데이터를 발송합니다.\n")
+    logger.info("🎉 모든 작업 완료! 프론트엔드로 데이터를 발송합니다.\n")
     return {
         "story_id": story_id,
         "title": story_draft.title,
